@@ -927,6 +927,114 @@ function extractLaravelRoutes(tree: any, filePath: string): ExtractedRoute[] {
 }
 
 // ============================================================================
+// Java Spring Boot Route Extraction (regex-based, language-agnostic fallback)
+// ============================================================================
+
+/**
+ * Maps Spring annotation names → HTTP methods.
+ * Handles both explicit method annotations and @RequestMapping with method= attribute below.
+ */
+const SPRING_ANNOTATION_HTTP: Record<string, string> = {
+  GetMapping: 'GET',
+  PostMapping: 'POST',
+  PutMapping: 'PUT',
+  DeleteMapping: 'DELETE',
+  PatchMapping: 'PATCH',
+  RequestMapping: 'GET', // default; overridden by method= attribute below
+};
+
+/**
+ * Extract Spring Boot endpoint annotations from a Java file using regex.
+ * Handles forms:
+ *   @GetMapping("/path")
+ *   @RequestMapping("/path")
+ *   @RequestMapping(value = "/path")
+ *   @RequestMapping(path = "/path")
+ *   @RequestMapping(value = "/path", method = RequestMethod.POST)
+ *   @PostMapping   (no arg — route path defaults to "")
+ *   Class-level @RequestMapping("/prefix") combined with method-level annotations
+ */
+function extractJavaSpringRoutes(content: string, filePath: string): ExtractedDecoratorRoute[] {
+  const routes: ExtractedDecoratorRoute[] = [];
+  const lines = content.split('\n');
+
+  // Collect class-level @RequestMapping prefix (first occurrence)
+  let classPrefix = '';
+  const classMappingRe = /@RequestMapping\s*\(\s*(?:value\s*=\s*|path\s*=\s*)?["']([^"']+)["']/;
+  const classMappingMatch = content.match(classMappingRe);
+  if (classMappingMatch) {
+    classPrefix = classMappingMatch[1];
+  }
+
+  // Regex to find Spring mapping annotations
+  // Matches: @GetMapping, @PostMapping, @PutMapping, @DeleteMapping, @PatchMapping, @RequestMapping
+  const annotationRe = /@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)\s*(?:\(([^)]*)\))?/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = annotationRe.exec(content)) !== null) {
+    const annotationName = match[1];
+    const argsStr = match[2] ?? '';
+    const lineNumber = content.substring(0, match.index).split('\n').length - 1;
+
+    // Skip the class-level @RequestMapping (it's a prefix, not an endpoint by itself)
+    // We detect it by checking if the annotation appears before the class keyword in the same region
+    // Simple heuristic: if this is the first RequestMapping and it matches the class prefix, skip
+    if (annotationName === 'RequestMapping' && argsStr) {
+      const pathInArgs = extractSpringPath(argsStr);
+      if (pathInArgs === classPrefix && match.index <= content.indexOf('class ')) {
+        continue;
+      }
+    }
+
+    // Determine HTTP method
+    let httpMethod = SPRING_ANNOTATION_HTTP[annotationName] ?? 'GET';
+
+    // For @RequestMapping, check method= attribute
+    if (annotationName === 'RequestMapping' && argsStr) {
+      const methodMatch = argsStr.match(/method\s*=\s*RequestMethod\.(\w+)/);
+      if (methodMatch) {
+        httpMethod = methodMatch[1].toUpperCase();
+      }
+    }
+
+    // Extract path from args
+    let routePath = '';
+    if (argsStr) {
+      routePath = extractSpringPath(argsStr) ?? '';
+    }
+
+    // Combine with class prefix
+    const fullPath = classPrefix && routePath
+      ? `${classPrefix.replace(/\/$/, '')}/${routePath.replace(/^\//, '')}`
+      : classPrefix || routePath;
+
+    routes.push({
+      filePath,
+      routePath: fullPath || '/',
+      httpMethod,
+      decoratorName: annotationName,
+      lineNumber,
+    });
+  }
+
+  return routes;
+}
+
+/**
+ * Extract path string from Spring annotation argument string.
+ * Handles: "/path", value="/path", path="/path"
+ */
+function extractSpringPath(argsStr: string): string | null {
+  // Named attribute: value = "/path" or path = "/path"
+  const namedMatch = argsStr.match(/(?:value|path)\s*=\s*["']([^"']+)["']/);
+  if (namedMatch) return namedMatch[1];
+  // Positional: "/path" (first string literal)
+  const positionalMatch = argsStr.match(/["']([^"']+)["']/);
+  if (positionalMatch) return positionalMatch[1];
+  return null;
+}
+
+// ============================================================================
 // ORM Query Detection (Prisma + Supabase)
 // ============================================================================
 
@@ -1534,6 +1642,12 @@ const processFileGroup = (
     if (provider.isRouteFile?.(file.path)) {
       const extractedRoutes = extractLaravelRoutes(tree, file.path);
       result.routes.push(...extractedRoutes);
+    }
+
+    // Extract Spring Boot routes for Java files
+    if (language === SupportedLanguages.Java) {
+      const springRoutes = extractJavaSpringRoutes(file.content, file.path);
+      result.decoratorRoutes.push(...springRoutes);
     }
 
     // Extract ORM queries (Prisma, Supabase)

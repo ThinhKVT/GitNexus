@@ -258,7 +258,16 @@ const processParsingSequential = async (
       query = new Parser.Query(language, queryString);
       matches = query.matches(tree.rootNode);
     } catch (queryError) {
-      console.warn(`Query error for ${file.path}:`, queryError);
+      // Improved debug info: include query size and a snippet so we can diagnose TSQuery errors
+      try {
+        const qsPreview = typeof queryString === 'string' ? (queryString.length > 2000 ? queryString.slice(0, 2000) + '\n... (truncated)' : queryString) : '<no query string>';
+        console.warn(`Query error for ${file.path}: ${queryError instanceof Error ? queryError.message : String(queryError)}`);
+        console.warn(`  Query length: ${typeof queryString === 'string' ? queryString.length : 'unknown'}`);
+        console.warn('  Query snippet:\n', qsPreview);
+        if (queryError && (queryError as any).stack) console.warn((queryError as any).stack);
+      } catch (logErr) {
+        console.warn(`Query error for ${file.path}:`, queryError);
+      }
       continue;
     }
 

@@ -1,5 +1,4 @@
-
-/* 
+/*
  * Tree-sitter queries for extracting code definitions.
  * 
  * Note: Different grammars (typescript vs tsx vs javascript) may have
@@ -349,6 +348,31 @@ export const JAVA_QUERIES = `
     object: (_) @assignment.receiver
     field: (identifier) @assignment.property)
   right: (_)) @assignment
+
+; ===== Java annotation captures =====
+; Capture Java annotations so they appear as decorator captures for the parse-worker.
+; Support marker_annotation: @RestController  @Override  @Entity
+(marker_annotation
+  name: (identifier) @decorator.name) @decorator
+
+; Support annotation with no args but parentheses: @GetMapping()
+(annotation
+  name: (identifier) @decorator.name) @decorator
+
+; Support single positional string literal: @RequestMapping("/path") or @GetMapping("/path")
+; annotation_argument_list directly contains a string_literal in this case
+(annotation
+  name: (identifier) @decorator.name
+  arguments: (annotation_argument_list
+    (string_literal (string_fragment) @decorator.arg))) @decorator
+
+; Support named element value pair with string: @RequestMapping(value = "/path") or @GetMapping(path = "/me")
+(annotation
+  name: (identifier) @decorator.name
+  arguments: (annotation_argument_list
+    (element_value_pair
+      value: (string_literal (string_fragment) @decorator.arg)))) @decorator
+
 `;
 
 // C queries - works with tree-sitter-c
@@ -495,7 +519,7 @@ export const CPP_QUERIES = `
 (field_declaration declarator: (function_declarator declarator: [(field_identifier) (identifier)] @name)) @definition.method
 
 ; Inline class method declarations returning a pointer (User* lookup();)
-(field_declaration declarator: (pointer_declarator declarator: (function_declarator declarator: [(field_identifier) (identifier)] @name))) @definition.method
+(field_declaration declarator: (pointer_declarator declarator: (function_declarator declarator: [(field_identifier) (identifier)] @name)) @definition.method
 
 ; Inline class method declarations returning a reference (User& lookup();)
 (field_declaration declarator: (reference_declarator (function_declarator declarator: [(field_identifier) (identifier)] @name))) @definition.method
@@ -746,7 +770,7 @@ export const PHP_QUERIES = `
 (class_declaration
   name: (name) @heritage.class
   (class_interface_clause
-    [(name) (qualified_name)] @heritage.implements)) @heritage.impl
+    [(name) (qualified_name)] @heritage.implements)) @heritage
 
 ; ── Heritage: use trait (must capture enclosing class name) ──────────────────
 (class_declaration
